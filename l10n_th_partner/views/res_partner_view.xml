@@ -45,4 +45,27 @@
             </field>
         </field>
     </record>
+    <record id="view_partner_form_tong_test1" model="ir.ui.view">
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form" />
+        <field name="arch" type="xml">
+                <xpath expr="//div[@name='button_box']" position="before">
+                Hello
+                </xpath>
+        </field>
+    </record>
+    <record id="view_partner_form_check_vat" model="ir.ui.view">
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form" />
+        <field name="arch" type="xml">
+                <div name="button_box" position="inside">
+                <button type="object" class="oe_stat_button" icon="fa-check-square-o" name="action_view_partner_invoices" context="{'default_partner_id': active_id}">
+                        <div class="o_form_field o_stat_info">
+                            <span class="o_stat_text">Check with RD</span>
+                        </div>
+                    </button>
+                </div>
+        </field>
+    </record>
+
 </odoo>
