@@ -1,8 +1,15 @@
 # Copyright 2019 Ecosoft Co., Ltd (http://ecosoft.co.th/)
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html)
 import logging
+from logging import CRITICAL, INFO
+
+import zeep
+from zeep import client
 
 from odoo import api, fields, models
+from requests import Session
+from zeep import Client
+from zeep.transports import Transport
 
 _logger = logging.getLogger(__name__)
 
@@ -10,7 +17,9 @@ _logger = logging.getLogger(__name__)
 class ResPartner(models.Model):
     _inherit = "res.partner"
 
-    branch = fields.Char(string="Tax Branch", help="Branch ID, e.g., 0000, 0001, ...")
+    branch = fields.Char(string="Tax Branch",
+                         help="Branch ID, e.g., 0000, 0001, ...")
+    # check_vat_id = fields.Boolean(string="Check Tax ID with Revenue Department")
     name_company = fields.Char(
         string="Name Company", inverse="_inverse_name_company", index=True
     )
@@ -49,7 +58,8 @@ class ResPartner(models.Model):
                 continue
             prefix = rec.partner_company_type_id.prefix
             suffix = rec.partner_company_type_id.suffix
-            rec.name = " ".join(p for p in (prefix, rec.name_company, suffix) if p)
+            rec.name = " ".join(p for p in (
+                prefix, rec.name_company, suffix) if p)
             rec._inverse_name()
 
     @api.onchange("company_type")
@@ -64,3 +74,21 @@ class ResPartner(models.Model):
         records = self.search([("name_company", "=", False)])
         records._inverse_name_company()
         _logger.info("%d partners updated installing module.", len(records))
+
+    def action_view_partner_check_tax_id(self):
+        _logger.log(INFO, self.vat)
+        sess = Session()
+        sess.verify = False
+        transp = Transport(session=sess)
+        cl = Client('https://rdws.rd.go.th/serviceRD3/vatserviceRD3.asmx?wsdl',
+                    transport=transp)
+        result = cl.service.Service(
+            username='anonymous',
+            password='anonymous',
+            TIN='0105548115897',
+            ProvinceCode=0,
+            BranchNumber=0,
+            AmphurCode=9)
+        result = zeep.helpers.serialize_object(result)
+        _logger.log(CRITICAL, result)
+
