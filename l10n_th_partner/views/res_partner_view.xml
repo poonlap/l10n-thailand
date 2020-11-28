@@ -59,7 +59,7 @@
         <field name="inherit_id" ref="base.view_partner_form" />
         <field name="arch" type="xml">
                 <div name="button_box" position="inside">
-                <button type="object" class="oe_stat_button" icon="fa-check-square-o" name="action_view_partner_check_tax_id" context="{'default_partner_id': active_id}">
+                <button type="object" class="oe_stat_button" icon="fa-check-square-o" name="action_view_partner_check_tax_id">
                         <div class="o_form_field o_stat_info">
                             <span class="o_stat_text">Check Tax ID</span>
                         </div>
@@ -67,5 +67,4 @@
                 </div>
         </field>
     </record>
-
 </odoo>
