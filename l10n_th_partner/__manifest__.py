@@ -17,6 +17,7 @@
         "views/res_partner_view.xml",
         "views/res_users_view.xml",
     ],
+    "external_dependencies": {"python": ["requests", "zeep"]},
     "post_init_hook": "post_init_hook",
     "installable": True,
     "development_status": "Alpha",
