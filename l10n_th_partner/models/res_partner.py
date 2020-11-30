@@ -3,7 +3,7 @@
 import logging
 from logging import CRITICAL, INFO
 
-from odoo import api, fields, models
+from odoo import api, fields, models, _
 from odoo.api import onchange
 
 from requests import Session
@@ -75,7 +75,7 @@ class ResPartner(models.Model):
         _logger.info("%d partners updated installing module.", len(records))
 
     @staticmethod
-    def rd_tin_service(tin):
+    def check_rd_tin_service(tin):
         """Return bool after verifiying Tax Identification Number (TIN) or Personal Identification Number (PIN) 
            by using Revenue Department's web service to prevent forging.
 
@@ -94,7 +94,7 @@ class ResPartner(models.Model):
         return res_ord_dict['vIsExist']['anyType'][0] == 'Yes'
 
     @staticmethod
-    def rd_vat_service_getinfo(tin):
+    def getinfo_rd_vat_service(tin):
         """Return ordered dict result from Revenue Department's web service.
 
            :param tin: a string for TIN or PIN
@@ -155,11 +155,22 @@ class ResPartner(models.Model):
     @api.onchange("vat")
     def _onchange_vat(self):
         _logger.log(INFO, self.vat)
-        if self.vat != False and len(self.vat) == 13:
-            result = self.rd_vat_service_getinfo(self.vat)
-            _logger.log(INFO, result)
-            name_company = (
-                result["vtitleName"]['anyType'][0]
-                + result["vName"]['anyType'][0]
-            )
-            self.update({"name_company": name_company})
+        if self.vat == False:
+            return {}
+        if len(self.vat) == 13:
+            self.update({"vat": self.vat})
+        # if self.vat != False and len(self.vat) == 13:
+        #     if ResPartner.check_rd_tin_service(self.vat):
+        #         result = self.getinfo_rd_vat_service(self.vat)
+        #         _logger.log(INFO, result)
+        #         name_company = (
+        #             result["vtitleName"]['anyType'][0]
+        #             + result["vName"]['anyType'][0]
+        #         )
+        #         self.update({"name_company": name_company})
+        else:
+            warning_mess = {
+                'title': _('The TIN is not valid.'),
+                'message': _('Can not verify ' + self.vat + ' with RD Web service')
+            }
+            return {'warning': warning_mess}
