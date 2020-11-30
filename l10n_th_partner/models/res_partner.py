@@ -2,13 +2,22 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html)
 import logging
 from logging import CRITICAL, INFO
+import re
+from re import T
+from typing import Dict
+import requests
 
-from odoo import api, fields, models, _
+from requests.sessions import OrderedDict
+
+from odoo import api, fields, models, _, exceptions
 from odoo.api import onchange
 
 from requests import Session
 from zeep import Client, Transport, helpers
-import os
+from os import path
+from pathlib import Path
+import pprint
+
 
 _logger = logging.getLogger(__name__)
 
@@ -17,8 +26,9 @@ class ResPartner(models.Model):
     _inherit = "res.partner"
 
     branch = fields.Char(string="Tax Branch",
-                         help="Branch ID, e.g., 0000, 0001, ...")
-    check_tax_id = fields.Boolean(string="Check Tax ID with Revenue Department")
+                         help="Branch ID, e.g., 0000, 0001, ...",
+                         default="00000")
+    rd_webservices = fields.Boolean(string="Verify and pull data from Revenue Department's web services.")
     name_company = fields.Char(
         string="Name Company", inverse="_inverse_name_company", index=True
     )
@@ -84,41 +94,62 @@ class ResPartner(models.Model):
 
         tin_web_service_url = "https://rdws.rd.go.th/serviceRD3/checktinpinservice.asmx?wsdl"
         sess = Session()
-        dir = os.path.dirname(os.path.realpath(__file__))
-        _logger.log(INFO, dir)
-        sess.verify = dir + '/adhq1_ADHQ5.cer'
+        mod_dir = path.dirname(path.realpath(__file__))
+        cert_path = str(Path(mod_dir).parents[0]) + '/static/cert/adhq1_ADHQ5.cer'
+        sess.verify = cert_path
         transp = Transport(session=sess)
-        cl = Client(tin_web_service_url, transport=transp)
+        try:
+            cl = Client(tin_web_service_url, transport=transp)
+        except requests.exceptions.SSLError:
+            _logger.log(INFO, 'Fall back to unverifed HTTPS request.')
+            sess.verify = False
+            transp = Transport(session=sess)
+            cl = Client(tin_web_service_url, transport=transp)
         result = cl.service.ServiceTIN('anonymous', 'anonymous', tin)
         res_ord_dict = helpers.serialize_object(result)
-        return res_ord_dict['vIsExist']['anyType'][0] == 'Yes'
+        _logger.log(INFO, pprint.pformat( res_ord_dict))
+        return res_ord_dict['vIsExist'] is not None
 
     @staticmethod
-    def getinfo_rd_vat_service(tin):
-        """Return ordered dict result from Revenue Department's web service.
+    def get_info_rd_vat_service(tin, branch = 0):
+        """Return ordered dict with necessary result from Revenue Department's web service.
 
            :param tin: a string for TIN or PIN
-        """
 
-        tin_web_service_url = "https://rdws.rd.go.th/serviceRD3/vatserviceRD3.asmx?wsdl"
+           :param branch: one digit of branch number
+        """
+        branch = int(branch)
+        vat_web_service_url = "https://rdws.rd.go.th/serviceRD3/vatserviceRD3.asmx?wsdl"
         sess = Session()
-        mydir = os.path.dirname(os.path.realpath(__file__))
-        
-        _logger.log(INFO, mydir)
-        cert = mydir + '/all.cer'
-        _logger.log(INFO, "********" + cert)
-        sess.verify = False  
+        mod_dir = path.dirname(path.realpath(__file__))
+        cert_path = str(Path(mod_dir).parents[0]) + '/static/cert/adhq1_ADHQ5.cer'
+        sess.verify = cert_path
         transp = Transport(session=sess)
-        cl = Client(tin_web_service_url, transport=transp)
+        try:
+            cl = Client(vat_web_service_url, transport=transp)
+        except requests.exceptions.SSLError:
+            _logger.log(INFO, 'Fall back to unverifed HTTPS request.')
+            sess.verify = False
+            transp = Transport(session=sess)
+            cl = Client(vat_web_service_url, transport=transp)
         result = cl.service.Service(
             'anonymous',
             'anonymous',
             TIN=tin,
             ProvinceCode=0,
-            BranchNumber=0,
+            BranchNumber=branch,
             AmphurCode=0,
         )
-        return helpers.serialize_object(result)
+        odata = helpers.serialize_object(result)
+        _logger.log(INFO, pprint.pformat(odata))
+        data = OrderedDict()
+        if odata['vmsgerr'] is None:           
+            for key, value in odata.items():
+                if value is None or value['anyType'][0] == '-' or key in {'vNID', 'vtitleName','vName','vBusinessFirstDate'}:
+                    continue
+                data[key] = value['anyType'][0]
+        _logger.log(INFO, pprint.pformat( data ))
+        return data
         
     # def action_view_partner_check_tax_id(self):
     #     _logger.log(INFO, self.vat)
@@ -152,25 +183,61 @@ class ResPartner(models.Model):
     #         )
     #         self.update({"name_company": name_company, "street": street})
 
+    @api.constrains('branch')
+    def _validate_branch(self):
+        if self.branch is not None and re.match(r'\d{5}',self.branch) is None:
+            raise exceptions.ValidationError(_("Branch number must be 5 digits."))
+
     @api.onchange("vat")
     def _onchange_vat(self):
         _logger.log(INFO, self.vat)
-        if self.vat == False:
+        word_map = {
+            'vBuildingName' : 'อาคาร ',
+            'vFloorNumber' : 'ชั้นที่ ',
+            'vVillageName' : 'หมู่บ้าน ',
+            'vRoomNumber' : 'ห้องเลขที่ ',
+            'vHouseNumber' : 'เลขที่ ',
+            'vMooNumber' : 'หมู่ที่ ',
+            'vSoiName' : 'ซอย ',
+            'vStreetName' : 'ถนน ',
+            'vThambol' : 'ตำบล',
+            'vAmphur' : 'อำเภอ',
+            'vProvince' : 'จังหวัด',
+            'vPostCode' : '',
+        }
+        map_street = ['vBuildingName', 'vRoomNumber', 'vFloorNumber', 'vHouseNumber','vStreetName', 'vSoiName' ]
+        map_street2 = ['vThambol']
+        map_city = ['vAmphur']
+        map_state = ['vProvince']
+        map_zip = ['vPostCode']
+
+        if self.vat == False or len(self.vat) != 13:
             return {}
-        if len(self.vat) == 13:
-            self.update({"vat": self.vat})
-        # if self.vat != False and len(self.vat) == 13:
-        #     if ResPartner.check_rd_tin_service(self.vat):
-        #         result = self.getinfo_rd_vat_service(self.vat)
-        #         _logger.log(INFO, result)
-        #         name_company = (
-        #             result["vtitleName"]['anyType'][0]
-        #             + result["vName"]['anyType'][0]
-        #         )
-        #         self.update({"name_company": name_company})
         else:
-            warning_mess = {
-                'title': _('The TIN is not valid.'),
-                'message': _('Can not verify ' + self.vat + ' with RD Web service')
-            }
-            return {'warning': warning_mess}
+            if ResPartner.check_rd_tin_service(self.vat):
+                data = ResPartner.get_info_rd_vat_service(self.vat, self.branch)
+                street = ''
+                for i in map_street:
+                    if i in data.keys():
+                        street += word_map[i] + data[i] + ' '
+                thambol  = word_map['vThambol'] + data['vThambol'] if data['vProvince'] != 'กรุงเทพมหานคร' else 'แขวง' + data['vThambol']
+                amphur  = word_map['vAmphur'] + data['vAmphur'] if data['vProvince'] != 'กรุงเทพมหานคร' else 'เขต' + data['vAmphur']
+                self.update({
+                    'name_company' : data['vBranchTitleName'] + ' ' + data['vBranchName'],
+                    'street' : street,
+                    'street2' : thambol,
+                    'city' : amphur,
+                    'zip' : data['vPostCode'],
+                    # 'state' : data['vProvince']
+                })
+                # if data['vmsgerr'] is None:
+                #     self.update({
+                #         'name_company' : data['vtitleName'] + " " + data['vName'],
+                #         'street' : data['vBuildingName'],
+                #          })
+            else:
+                warning_mess = {
+                    'title': _("The TIN %s is not valid." % self.vat),
+                    'message': _("Connected to RD's web service and failed to verify TIN or PIN %s." % self.vat)
+                }
+                return {'warning': warning_mess}
